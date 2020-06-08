@@ -3,5 +3,5 @@ project(Sudoku)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(Sudoku sudoku.cpp)
+add_executable(Sudoku sudoku.cpp Board.cpp Board.h sudoku.h)
 target_link_libraries(Sudoku SDL2 SDL2_ttf SDL2_gfx)

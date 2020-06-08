@@ -1,15 +1,235 @@
 #include <cstdio>
 #include <optional>
-#include <string>
-
 #include <getopt.h>
+#include <time.h>
 
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
-#include <SDL2/SDL2_gfxPrimitives.h>
+#include "SDL2/SDL.h"
+#include "SDL2/SDL_ttf.h"
+#include "SDL2/SDL2_gfxPrimitives.h"
 
-#include "sudoku.h"
-#include "Board.h"
+#define MAX_TRIES 80
+
+struct Options {
+    int num_remove = 50;
+    bool hints = false;
+    int seed = 0;
+    bool annotations = false;
+};
+
+struct Graphics {
+    SDL_Window* win;
+    SDL_Renderer* ren;
+    TTF_Font* font;
+    TTF_Font* small;
+};
+
+typedef std::pair<int, int> Coords;
+
+class Board {
+private:
+    int tiles[9][9] = {};
+    bool original[9][9] = {};
+public:
+
+    bool is_original(int l, int c) {
+        return original[l][c];
+    }
+
+    int get_tile(int l, int c) {
+        return tiles[l][c];
+    }
+
+    void set_tile(int val, int l, int c) {
+        tiles[l][c] = val;
+    }
+
+    void clear() {
+        for (int l = 0; l < 9; l++) {
+            for (int c = 0; c < 9; c++) {
+                tiles[l][c] = 0;
+                original[l][c] = false;
+            }
+        }
+    }
+
+    void consolidate() {
+        for (int l = 0; l < 9; l++) {
+            for (int c = 0; c < 9; c++) {
+                if (tiles[l][c] != 0) {
+                    original[l][c] = true;
+                }
+            }
+        }
+    }
+
+    void clear_user() {
+        for (int l = 0; l < 9; l++)
+            for (int c = 0; c < 9; c++)
+                if (!is_original(l, c))
+                    tiles[l][c] = 0;
+    }
+
+    Board() = default;
+    Board(int tiles[9][9]) {
+        for (int l = 0; l < 9; l++)
+            for (int c = 0; c < 9; c++)
+                this->tiles[l][c] = tiles[l][c];
+    }
+
+    bool remove(int num_remove) {
+        int tries = 0;
+
+        while (num_remove > 0 && tries < MAX_TRIES) {
+            int l = rand() % 9;
+            int c = rand() % 9;
+
+            if (tiles[l][c] == 0) continue;
+
+            int backup = tiles[l][c];
+            tiles[l][c] = 0;
+
+            if (is_unique_solvable()) {
+                num_remove--;
+            } else {
+                tiles[l][c] = backup;
+                tries++;
+            }
+        }
+
+        for (int l = 0; l < 9; l++)
+            for (int c = 0; c < 9; c++)
+                this->original[l][c] = tiles[l][c] != 0;
+
+        return tries < MAX_TRIES;
+    }
+
+    bool fill(bool random) {
+        Coords xy = next_empty();
+        if (xy.first == -1) return true;
+
+        int offset = 0;
+        if (random) offset = rand() % 9;
+
+        for (int val = 0; val < 9; val++) {
+            int maybe = 1 + ((val + offset) % 9);
+
+            if (!is_allowed(maybe, xy.first, xy.second)) continue;
+
+            tiles[xy.first][xy.second] = maybe;
+            if (!fill(random)) tiles[xy.first][xy.second] = 0;
+            else return true;
+        }
+
+        return false;
+    }
+
+    bool unique_rec(int& numSols) {
+        Coords xy = next_empty();
+        if (xy.first == -1) {
+            numSols++;
+            return true;
+        }
+
+        for (int val = 1; val <= 9; val++) {
+            if (!is_allowed(val, xy.first, xy.second)) continue;
+
+            tiles[xy.first][xy.second] = val;
+            if (!unique_rec(numSols)) {
+                tiles[xy.first][xy.second] = 0;
+            } else {
+                if (numSols < 2) tiles[xy.first][xy.second] = 0;
+                else return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool is_unique_solvable() {
+        int backup[9][9];
+        std::copy(&tiles[0][0], &tiles[0][0] + 81, &backup[0][0]);
+
+        int sols = 0;
+        unique_rec(sols);
+
+        std::copy(&backup[0][0], &backup[0][0] + 81, &tiles[0][0]);
+
+        return sols == 1;
+    }
+
+    bool lin_has_val(int val, int lin) {
+        for (int k = 0; k < 9; k++)
+            if (tiles[lin][k] == val)
+                return true;
+        return false;
+    }
+
+    bool col_has_val(int val, int col) {
+        for (int k = 0; k < 9; k++)
+            if (tiles[k][col] == val)
+                return true;
+        return false;
+    }
+
+    bool block_has_val(int val, int lin, int col) {
+        lin = (lin / 3) * 3;
+        col = (col / 3) * 3;
+
+        for (int l = lin; l < lin + 3; l++)
+            for (int c = col; c < col + 3; c++)
+                if (tiles[l][c] == val)
+                    return true;
+        return false;
+    }
+
+    bool is_allowed(int val, int lin, int col) {
+        if (tiles[lin][col] != 0)
+            return false;
+        if (lin_has_val(val, lin))
+            return false;
+        if (col_has_val(val, col))
+            return false;
+        if (block_has_val(val, lin, col))
+            return false;
+        return true;
+    }
+
+    Coords next_empty() {
+        for (int l = 0; l < 9; l++)
+            for (int c = 0; c < 9; c++)
+                if (tiles[l][c] == 0)
+                    return std::make_pair(l, c);
+        return std::make_pair(-1, -1);
+    }
+
+    void print() {
+        for (int y = 0; y < 9; y++) {
+            printf("%d %d %d", tiles[y][0], tiles[y][1], tiles[y][2]);
+            printf("|");
+            printf("%d %d %d", tiles[y][3], tiles[y][4], tiles[y][5]);
+            printf("|");
+            printf("%d %d %d\n", tiles[y][6], tiles[y][7], tiles[y][8]);
+            if (y == 2 || y == 5)
+                printf("=================\n");
+        }
+        printf("\n");
+    }
+};
+
+#define CELL_WIDTH 48
+#define THIN_PAD 8
+#define THICK_PAD 18
+#define WIN_TITLE "Sudoku"
+#define WIN_WIDTH (CELL_WIDTH * 9 + THIN_PAD * 6 + THICK_PAD * 4)
+#define WIN_HEIGHT (WIN_WIDTH + CELL_WIDTH + THICK_PAD - THIN_PAD)
+
+struct State {
+    bool quit = false;
+    bool selected = false;
+    int x;
+    int y;
+    int highlight = 0;
+};
 
 void exit_sdl_error(std::string msg) {
     fprintf(stderr, "%s: %s\n", msg.c_str(), SDL_GetError());
@@ -86,6 +306,27 @@ void draw_number(Graphics& gpx, int num, int x_win, int y_win, SDL_Color color, 
     SDL_DestroyTexture(Message);
 }
 
+Coords win_to_grid(int x, int y) {
+    Coords par;
+    for (int k = 0; k < 0; k++) {
+        int win_x = get_win_x(k);
+        if (x > win_x && x < win_x + CELL_WIDTH) {
+            par.first = k;
+            break;
+        }
+    }
+
+    for (int k = 0; k < 0; k++) {
+        int win_y = get_win_y(k);
+        if (y > win_y && x < win_y + CELL_WIDTH) {
+            par.second = k;
+            break;
+        }
+    }
+
+    return par;
+}
+
 void draw_header(Graphics& gpx, Board& board, State& stat, Options& opts) {
     // Possíveis números
     for (int k = 1; k <= 9; k++) {
@@ -129,7 +370,6 @@ void draw_board(Graphics& gpx, Board& board, State& stat, Options& opts) {
                     8,
                     r, g, b, 255
                     );
-
             SDL_Color color;
             if (board.is_original(l,c)) color = {255, 255, 160, SDL_ALPHA_OPAQUE};
             else color = {105, 255, 155, SDL_ALPHA_OPAQUE};
@@ -190,6 +430,7 @@ int grid_coords_y(int win_y) {
         int aux = get_win_y(l);
         if (aux < win_y && aux + CELL_WIDTH > win_y) return l;
     }
+
     return -1;
 }
 
@@ -233,17 +474,11 @@ void handle_event(SDL_Event& event, Board& board, State& stat, Options& opts) {
                 }
                 break;
             }
-            case SDLK_w:
-                board.save(opts);
-                break;
-            case SDLK_l:
-                board.load(opts);
+            case SDLK_q:
+                stat.quit = true;
                 break;
             case SDLK_DELETE:
                 if (stat.selected && !board.is_original(stat.y, stat.x)) board.set_tile(0, stat.y, stat.x);
-                break;
-            case SDLK_q:
-                stat.quit = true;
                 break;
             case SDLK_a:
                 opts.annotations = !opts.annotations;
